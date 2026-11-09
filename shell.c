@@ -1,46 +1,108 @@
+
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <wait.h>
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <errno.h>
 
-#define BSIZE 20
+#define BSIZE 1024
 
-/***********************************************************************
- * This starter shell implements a simple shell that implements:
- * 
- * (1) An internal EXIT command that exits the shell.
- * (2) Executes a external program without any command line arguments
- * 
- ***********************************************************************/
-int main(int argc, char *argv[]){
+// Handle SIGINT (Ctrl+C)
+void handleSignal(int signal) {
+    if (signal == SIGINT) {
+        write(STDOUT_FILENO, "\n", 1);
+    }
+}
+
+int main(int argc, char *argv[]) {
     char buffer[BSIZE];
     pid_t child;
     int status;
-    char *args[]={"",NULL};
+    char *args[20];
 
-    while(1){
+    // Register SIGINT handler
+    signal(SIGINT, handleSignal);
+
+    while (1) {
         printf("shell> ");
-        fgets(buffer,BSIZE-1,stdin);
-        buffer[(strlen(buffer)-1)]='\0';  //Remove NewLine
-        args[0]=buffer;
+        fflush(stdout);
 
-        //** Internal Command **
-        if(strcmp(buffer,"exit")==0){
+        if (fgets(buffer, BSIZE, stdin) == NULL) {
+            if (errno == EINTR) {
+                clearerr(stdin);
+                continue;
+            }
             break;
         }
-        //** External Command **
-        child = fork();
-        if(child==0){
-            //*** Child Process ***
-            execvp(args[0],args);
-            exit(0);
-        }else{
-            //*** Parent Process **
-            waitpid(-1,&status,0);
+
+        buffer[strcspn(buffer, "\n")] = '\0';
+
+        // Parse command and arguments
+        int i = 0;
+        char *token = strtok(buffer, " ");
+
+        while (token != NULL && i < 19) {
+            args[i] = token;
+            i++;
+            token = strtok(NULL, " ");
         }
 
+        args[i] = NULL;
+
+        // Handle empty input
+        if (args[0] == NULL) {
+            continue;
+        }
+
+        // Internal exit command
+        if (strcmp(args[0], "exit") == 0) {
+            break;
+        }
+
+        // Internal cd command
+        if (strcmp(args[0], "cd") == 0) {
+            if (args[1] == NULL) {
+                if (chdir(getenv("HOME")) != 0) {
+                    perror("cd");
+                }
+            } else {
+                if (chdir(args[1]) != 0) {
+                    perror("cd");
+                }
+            }
+            continue;
+        }
+
+        // External command
+        child = fork();
+
+        if (child == 0) {
+            // Child Process
+            signal(SIGINT, SIG_DFL);
+
+            execvp(args[0], args);
+
+            perror("execvp");
+            exit(1);
+
+        } else if (child > 0) {
+            // Parent Process
+            while (waitpid(child, &status, 0) == -1) {
+                if (errno == EINTR) {
+                    continue;
+                }
+
+                perror("waitpid");
+                break;
+            }
+
+        } else {
+            perror("fork");
+        }
     }
+
     return 0;
 }
